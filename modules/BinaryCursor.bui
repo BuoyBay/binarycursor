@@ -1,0 +1,220 @@
+#If TargetWindows Then
+Private Declare Function BCFloat32 Lib "ucrtbase" Alias "memcpy" (ByRef destination As Single, source As Ptr, count As UInt64) As Ptr
+Private Declare Function BCFloat64 Lib "ucrtbase" Alias "memcpy" (ByRef destination As Double, source As Ptr, count As UInt64) As Ptr
+#Else
+Private Declare Function BCFloat32 Lib "c" Alias "memcpy" (ByRef destination As Single, source As Ptr, count As UInt64) As Ptr
+Private Declare Function BCFloat64 Lib "c" Alias "memcpy" (ByRef destination As Double, source As Ptr, count As UInt64) As Ptr
+#End If
+
+''' Bounded, owned byte snapshot with exact reads and explicit byte order.
+Public Class BinaryCursor
+    Private Property mData As Bytes
+    Private Property mPosition As Integer = 0
+
+    Public Sub Constructor(data As Bytes, maxBytes As Integer = 16777216)
+        If data Is Nil Then Throw New InvalidArgumentException("BinaryCursor data must not be Nil")
+        If maxBytes < 0 Or maxBytes > 16777216 Then Throw New InvalidArgumentException("BinaryCursor limit must be in 0..16777216")
+        If data.Count > maxBytes Then Throw New InvalidArgumentException("BinaryCursor input exceeds limit")
+        mData = New Bytes(data.Count)
+        mData.Append(data)
+    End Sub
+
+    Private Sub Constructor(data As Bytes, position As Integer, count As Integer)
+        mData = New Bytes(count)
+        If count > 0 Then
+            mData.Append(CType(CType(data.DataPtr(), Integer) + position, Ptr), count)
+        End If
+    End Sub
+
+    Public Property Length As Integer
+        Get
+            Return mData.Count
+        End Get
+    End Property
+
+    Public Property Position As Integer
+        Get
+            Return mPosition
+        End Get
+    End Property
+
+    Public Property Remaining As Integer
+        Get
+            Return mData.Count - mPosition
+        End Get
+    End Property
+
+    Public Property EOF As Boolean
+        Get
+            Return mPosition = mData.Count
+        End Get
+    End Property
+
+    Private Sub Require(count As Integer)
+        If count < 0 Or count > Me.Remaining Then
+            Throw New InvalidArgumentException("BinaryCursor exact read exceeds remaining bytes")
+        End If
+    End Sub
+
+    Public Sub Seek(position As Integer)
+        If position < 0 Or position > mData.Count Then Throw New InvalidArgumentException("BinaryCursor seek outside input")
+        mPosition = position
+    End Sub
+
+    Public Sub Skip(offset As Integer)
+        If offset < -mPosition Or offset > Me.Remaining Then Throw New InvalidArgumentException("BinaryCursor skip outside input")
+        mPosition += offset
+    End Sub
+
+    ''' Copy bytes at the current position without advancing it.
+    Public Function PeekBytes(count As Integer) As Bytes
+        Me.Require(count)
+        Dim output As New Bytes(count)
+        If count > 0 Then
+            output.Append(CType(CType(mData.DataPtr(), Integer) + mPosition, Ptr), count)
+        End If
+        Return output
+    End Function
+
+    Public Function ReadBytes(count As Integer) As Bytes
+        Dim output As Bytes = Me.PeekBytes(count)
+        mPosition += count
+        Return output
+    End Function
+
+    ''' Decode before committing position, so malformed UTF-8 leaves it unchanged.
+    Public Function ReadUTF8(count As Integer) As String
+        Dim output As String = Me.PeekBytes(count).ToString(Text.Encodings.UTF8)
+        mPosition += count
+        Return output
+    End Function
+
+    Public Function ReadUInt8() As Integer
+        Me.Require(1)
+        Dim output As Integer = mData.Item(mPosition)
+        mPosition += 1
+        Return output
+    End Function
+
+    Public Function ReadInt8() As Integer
+        Dim output As Integer = Me.ReadUInt8()
+        If output >= 128 Then output -= 256
+        Return output
+    End Function
+
+    ''' Canonical unsigned LEB128 in 0..2^63-1; failure preserves Position.
+    Public Function ReadVarUInt() As Integer
+        Return Me.ReadVarValue(False)
+    End Function
+
+    ''' Canonical ZigZag LEB128 over the full signed Integer range.
+    Public Function ReadVarInt() As Integer
+        Return Me.ReadVarValue(True)
+    End Function
+
+    Private Function ReadVarValue(signedValue As Boolean) As Integer
+        Dim limit As Integer = 9
+        If signedValue Then limit = 10
+        Dim magnitude As Integer = 0
+        Dim weight As Integer = 1
+        Dim negative As Boolean = False
+        For i As Integer = 0 To limit - 1
+            If i >= Me.Remaining Then Throw New InvalidArgumentException("BinaryCursor truncated varint")
+            Dim octet As Integer = mData.Item(mPosition + i)
+            Dim payload As Integer = octet Mod 128
+            If i = limit - 1 Then
+                If octet >= 128 Then Throw New InvalidArgumentException("BinaryCursor varint overflow")
+                If signedValue And payload > 1 Then Throw New InvalidArgumentException("BinaryCursor signed varint overflow")
+            End If
+            If i > 0 And octet < 128 And payload = 0 Then Throw New InvalidArgumentException("BinaryCursor noncanonical varint")
+            If signedValue And i = 0 Then
+                negative = (payload Mod 2) = 1
+                magnitude = payload \ 2
+            Else
+                magnitude += payload * weight
+            End If
+            If octet < 128 Then
+                Dim output As Integer = magnitude
+                If negative Then output = -magnitude - 1
+                mPosition += i + 1
+                Return output
+            End If
+            If signedValue And i = 0 Then
+                weight = 64
+            Else
+                weight *= 128
+            End If
+        Next
+        Throw New InvalidArgumentException("BinaryCursor varint overflow")
+    End Function
+
+    Private Function ReadUnsigned(width As Integer, littleEndian As Boolean) As Integer
+        Me.Require(width)
+        Dim output As Integer = 0
+        For i As Integer = 0 To width - 1
+            Dim index As Integer = mPosition + i
+            If littleEndian Then index = mPosition + width - 1 - i
+            output = output * 256 + mData.Item(index)
+        Next
+        mPosition += width
+        Return output
+    End Function
+
+    Public Function ReadUInt16(littleEndian As Boolean = True) As Integer
+        Return Me.ReadUnsigned(2, littleEndian)
+    End Function
+
+    Public Function ReadInt16(littleEndian As Boolean = True) As Integer
+        Dim output As Integer = Me.ReadUnsigned(2, littleEndian)
+        If output >= 32768 Then output -= 65536
+        Return output
+    End Function
+
+    Public Function ReadUInt32(littleEndian As Boolean = True) As Integer
+        Return Me.ReadUnsigned(4, littleEndian)
+    End Function
+
+    Public Function ReadInt32(littleEndian As Boolean = True) As Integer
+        Dim output As Integer = Me.ReadUnsigned(4, littleEndian)
+        If output >= 2147483648 Then output -= 4294967296
+        Return output
+    End Function
+
+    ''' The child owns a copy; parent advances only once the child exists.
+    Public Function ReadCursor(count As Integer) As BinaryCursor
+        Me.Require(count)
+        Dim child As New BinaryCursor(mData, mPosition, count)
+        mPosition += count
+        Return child
+    End Function
+    ''' Read IEEE binary32 bits without numeric conversion; failure preserves Position.
+    Public Function ReadFloat32(littleEndian As Boolean = True) As Single
+        Me.Require(4)
+        Dim encoded As New Bytes(4)
+        For i As Integer = 0 To 3
+            Dim index As Integer = mPosition + i
+            If Not littleEndian Then index = mPosition + 3 - i
+            encoded.Append(mData.Item(index))
+        Next
+        Dim output As Single
+        BCFloat32(output, encoded.DataPtr(), 4)
+        mPosition += 4
+        Return output
+    End Function
+
+    ''' Read IEEE binary64 bits without numeric conversion; failure preserves Position.
+    Public Function ReadFloat64(littleEndian As Boolean = True) As Double
+        Me.Require(8)
+        Dim encoded As New Bytes(8)
+        For i As Integer = 0 To 7
+            Dim index As Integer = mPosition + i
+            If Not littleEndian Then index = mPosition + 7 - i
+            encoded.Append(mData.Item(index))
+        Next
+        Dim output As Double
+        BCFloat64(output, encoded.DataPtr(), 8)
+        mPosition += 8
+        Return output
+    End Function
+
+End Class

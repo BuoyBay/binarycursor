@@ -1,0 +1,1 @@
+{"schema":1,"name":"binarycursor","version":"0.1.0","description":"Bounded owned byte cursors with atomic exact reads, endianness and UTF-8 validation"}
