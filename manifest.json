@@ -1,1 +1,1 @@
-{"schema":1,"name":"binarycursor","version":"0.1.0","description":"Bounded byte cursor \u2014 exact reads, endianness, UTF-8"}
+{"schema":1,"name":"binarycursor","version":"0.1.0","description":"Bounded binary reads"}
