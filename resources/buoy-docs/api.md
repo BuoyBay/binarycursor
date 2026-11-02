@@ -51,20 +51,6 @@ There is no shared slicing or writable view. A cursor is not thread-safe;
 concurrent callers must provide their own synchronization. The 16 MiB cap bounds
 each snapshot, not the total retained by multiple cursors or returned copies.
 
-## Example and verification
-
-The WAV header example
-parses a canonical PCM RIFF/WAVE fixture, then reads its two sample values. It
-deliberately expects the fixed 16-byte PCM fmt chunk followed by data; it is not
-a general WAV reader and does not implement additional/reordered chunks or codecs.
-
-
-The runner seals a fresh package, checks module/test/example on six desktop
-targets, runs the example and regression tests on Linux, and verifies 576 numeric
-reads against independently packed Python `struct` data. It isolates compilation
-from this checkout's unrelated application resource manifests. `BUOY` selects
-the compiler, `BPM_PACKAGER` the package command (default `/usr/bin/buoy`).
-
 ## Deliberate scope
 
 This is an independent in-memory parsing API inspired by Norman Palardy's
@@ -73,7 +59,6 @@ a speed improvement over BinaryStream. No file handles need closing. Streaming,
 file-backed buffering, 64-bit unsigned integers, bit fields,
 full-range UInt64 varints and writable cursors remain future work. See
 provenance and parity.
-
 
 [Typed API](typed-api.md) · [Getting started](getting-started.md)
 
@@ -91,8 +76,6 @@ may use at most nine bytes.
 Truncated, overflowing, and overlong encodings throw `InvalidArgumentException`
 and leave Position unchanged. Successful reads consume only their encoding,
 leaving subsequent fields available. No full-range UInt64 read API is added.
-
-Maintainers run the private validation suite before release. See the repository README for public build instructions.
 
 ## IEEE floating-point fields
 
@@ -114,5 +97,3 @@ Implementation uses `memcpy` from the system C runtime (`ucrtbase` on
 Windows), with no extra shipped native library or Xojo dependency. The six
 supported desktop targets are little-endian Intel/ARM64; byte order on
 the wire remains explicit.
-
-Maintainers run the private validation suite before release. See the repository README for public build instructions.
