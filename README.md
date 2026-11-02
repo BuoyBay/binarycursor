@@ -1,4 +1,4 @@
-# Read binary records with exact bounds and byte order
+# Bounded byte cursor — exact reads, endianness, UTF-8
 
 `Import binarycursor` provides `BinaryCursor`, an owned, bounded snapshot for
 parsing binary records. Existing Buoy `BinaryStream` handles file I/O and typed
